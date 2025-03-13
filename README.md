@@ -1,6 +1,6 @@
 # Web Testing Console
 
-Консольное приложение для управления DDoS атаками с поддержкой множества серверов и различных типов атак.
+Консольное приложение для управления Web тестированием с поддержкой множества серверов и различных типов атак.
 
 ## Возможности
 
@@ -60,7 +60,7 @@ cd ddos-console
 pip install -r requirements.txt
 ```
 
-3. Настройте серверы в файле `servers.json`:
+3. Настройте серверы в файле `servers_template.json`:
 ```json
 {
     "servers": [
@@ -78,7 +78,7 @@ pip install -r requirements.txt
 
 1. Запустите консоль:
 ```bash
-python ddos_console.py
+python console.py
 ```
 
 2. Выберите тип атаки и введите параметры
@@ -96,7 +96,3 @@ python ddos_console.py
 - Python 3.6+
 - Linux/Unix серверы для атак
 - Доступ к интернету
-
-## Лицензия
-
-MIT License
