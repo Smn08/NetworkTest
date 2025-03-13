@@ -5,7 +5,7 @@
             "host": "62.60.159.2",
             "port": 22,
             "username": "root",
-            "password": "gAAAAABn0yEZeAWhNZIJsb4uU1UMTrRxMxlgPMwKnXQIC3DGkQ7GkR2mp7YykeMeRP98AAWVTXZ3ixScxs5rqXI4tje561-18w==",
+            "password": "AhSQWGGuL2wY",
             "status": "online"
         },
         {
@@ -13,7 +13,7 @@
             "host": "195.2.67.224",
             "port": 22,
             "username": "root",
-            "password": "gAAAAABn0yEZ5hld0NahAbAownOSyF2-8CBwxd3PxN5wfIxwd55Euxo1ouRCAN6OlJii105R-Sj6DFkJ6jZji8bhItDVztCCrA==",
+            "password": "Redfrf00",
             "status": "offline"
         },
         {
@@ -21,8 +21,20 @@
             "host": "212.113.101.195",
             "port": 22,
             "username": "root",
-            "password": "gAAAAABn0yEZCtJtbEWNpBqzzGdIYfyGX1C07cwNVfS8PjQZoAEaOMjGQG5jZH5GDpZKy2r8vxfAiuYHk9l-hsJuTBcyuUDMHQ==",
+            "password": "Redfrf00",
             "status": "online"
         }
-    ]
+    ],
+    "settings": {
+        "logging": {
+            "level": "INFO",
+            "file": "logs/app.log"
+        },
+        "network": {
+            "timeout": 30
+        },
+        "interface": {
+            "theme": "dark"
+        }
+    }
 }

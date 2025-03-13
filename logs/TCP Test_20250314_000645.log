@@ -1,0 +1,18 @@
+2025-03-14 00:06:45,153 - INFO - Начало теста: TCP Test
+2025-03-14 00:06:45,154 - INFO - Цель: 1.1.1.1:80
+2025-03-14 00:06:45,154 - INFO - Длительность: 5 секунд
+2025-03-14 00:06:45,155 - INFO - Количество потоков: 1
+2025-03-14 00:06:45,155 - INFO - Выбранные серверы: ['62.60.159.2', '212.113.101.195']
+2025-03-14 00:06:46,103 - INFO - Сервер 62.60.159.2 доступен
+2025-03-14 00:06:46,927 - INFO - Сервер 212.113.101.195 доступен
+2025-03-14 00:06:47,153 - ERROR - Ошибка при выполнении теста: ServerExecutor.upload_script() takes 2 positional arguments but 3 were given
+2025-03-14 00:06:47,311 - ERROR - Подробности ошибки:
+2025-03-14 00:06:47,318 - ERROR - Traceback (most recent call last):
+  File "C:\Users\adm\Desktop\test123\menu.py", line 477, in run_test
+    if not test_executor.prepare_test(test_name, target, port, duration, threads, available_servers):
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\adm\Desktop\test123\test_executor.py", line 32, in prepare_test
+    if not executor.upload_script(script_path, remote_path):
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: ServerExecutor.upload_script() takes 2 positional arguments but 3 were given
+

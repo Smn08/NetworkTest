@@ -1,0 +1,15 @@
+{
+    "test_name": "TCP Test",
+    "target": "1.1.1.1",
+    "port": 80,
+    "duration": 5,
+    "threads": 1,
+    "timestamp": "20250314_004857",
+    "results": [],
+    "summary": {
+        "total_servers": 2,
+        "successful_servers": 0,
+        "total_packets": 0,
+        "average_speed": 0
+    }
+}
