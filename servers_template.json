@@ -1,0 +1,11 @@
+{
+    "servers": [
+        {
+            "name": "example_server",
+            "host": "1.2.3.4",
+            "port": 22,
+            "username": "root",
+            "password": "gAAAAABn0yuE6cMkckIdsvSdyM60koNeVE3quw_lhgaYh7_9_xdTpUxl0db_IWu5nVKSMdGOzquezhKnAEbz1jI6Xu3TpGbteQ=="
+        }
+    ]
+}

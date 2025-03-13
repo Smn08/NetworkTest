@@ -1,0 +1,5 @@
+paramiko>=2.7.2
+cryptography>=3.4.7
+bcrypt>=3.2.0
+colorama>=0.4.4
+requests>=2.26.0 
