@@ -1,0 +1,23 @@
+version: '3.8'
+
+services:
+  network-test:
+    build: .
+    container_name: network-test
+    environment:
+      - DISPLAY=host.docker.internal:0.0
+      - QT_X11_NO_MITSHM=1
+      - QT_DEBUG_PLUGINS=1
+      - QT_STYLE_OVERRIDE=Fusion
+      - QT_QPA_PLATFORM=xcb
+      - LIBGL_ALWAYS_INDIRECT=1
+    volumes:
+      - .:/app
+      - /tmp/.X11-unix:/tmp/.X11-unix
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    privileged: true
+    tty: true
+    stdin_open: true
+    stop_signal: SIGKILL
+    stop_grace_period: 1s 

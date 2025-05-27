@@ -334,6 +334,13 @@ class DDoSConsole:
         self.status_thread.daemon = True
         self.status_thread.start()
 
+        self.attack_monitor = AttackMonitor()
+        self.security_manager = SecurityManager()
+        self.error_handler = ErrorHandler()
+        self.recovery_manager = RecoveryManager()
+        self.server_monitor = ServerMonitor()
+        self.attack_controller = AttackController()
+
     def encrypt_password(self, password: str) -> str:
         """Шифрование пароля"""
         try:
@@ -427,78 +434,46 @@ class DDoSConsole:
             print(f"Ошибка при сохранении конфигурации: {str(e)}")
 
     def check_server_status(self, host: str, port: int = 22, silent=False) -> bool:
+        sock = None
         try:
-            if not silent:
-                print(f"\nПроверка {host}:")
-            
-            # Проверяем SSH порт
-            if not silent:
-                print("  Проверка SSH порта...", end=" ")
+            start_time = time.time()
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(5)
             result = sock.connect_ex((host, port))
-            sock.close()
+            latency = (time.time() - start_time) * 1000  # в миллисекундах
             
             if result == 0:
                 if not silent:
-                    print("порт открыт")
-                    print("  Проверка SSH подключения...", end=" ")
-                try:
-                    ssh = paramiko.SSHClient()
-                    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-                    
-                    # Получаем данные сервера
-                    server_data = next((s for s in self.servers if s["host"] == host), None)
-                    if not server_data:
-                        if not silent:
-                            print("ошибка: сервер не найден в списке")
-                        return False
-                        
-                    # Проверяем учетные данные
-                    username = server_data.get("username", "root")
-                    password = server_data.get("password", "")
-                    
-                    if not password:
-                        if not silent:
-                            print("ошибка: пароль не указан")
-                        return False
-                    
-                    # Расшифровываем пароль перед использованием
-                    decrypted_password = self.decrypt_password(password)
-                    
-                    try:
-                        ssh.connect(
-                            host,
-                            port=port,
-                            username=username,
-                            password=decrypted_password,
-                            timeout=10,
-                            banner_timeout=10
-                        )
-                        ssh.close()
-                        if not silent:
-                            print("успешно")
-                        return True
-                    except paramiko.AuthenticationException:
-                        if not silent:
-                            print(f"ошибка: неверные учетные данные (пользователь: {username})")
-                        return False
-                    except Exception as e:
-                        if not silent:
-                            print(f"ошибка: {str(e)}")
-                        return False
-                except Exception as e:
-                    if not silent:
-                        print(f"ошибка: {str(e)}")
-                    return False
+                    print(f"[INFO] Сервер {host} доступен (задержка: {latency:.2f} мс)")
+                self.server_monitor.update_server_stats({'ip': host}, 'online', latency)
+                self.server_monitor.reset_connection_attempts(host)
+                return True
             else:
                 if not silent:
-                    print(f"порт закрыт (код: {result})")
+                    print(f"[WARNING] Сервер {host} недоступен")
+                self.server_monitor.update_server_stats({'ip': host}, 'offline', error=f"Порт {port} закрыт")
+                
+                # Пытаемся переподключиться
+                if self.server_monitor.should_attempt_reconnect(host):
+                    print(f"[INFO] Попытка переподключения к серверу {host} через {self.server_monitor.reconnect_delay} секунд")
+                    time.sleep(self.server_monitor.reconnect_delay)
+                    return self.check_server_status(host, port, silent)
                 return False
+                    
         except Exception as e:
             if not silent:
-                print(f"  Ошибка проверки: {str(e)}")
+                print(f"[ERROR] Ошибка при проверке сервера {host}: {str(e)}")
+            self.server_monitor.update_server_stats({'ip': host}, 'offline', error=str(e))
+            
+            # Пытаемся переподключиться
+            if self.server_monitor.should_attempt_reconnect(host):
+                print(f"[INFO] Попытка переподключения к серверу {host} через {self.server_monitor.reconnect_delay} секунд")
+                time.sleep(self.server_monitor.reconnect_delay)
+                return self.check_server_status(host, port, silent)
             return False
+        finally:
+            if sock:
+                sock.close()
 
     def get_server_password(self, host: str) -> str:
         """Получаем пароль сервера из списка"""
@@ -509,33 +484,26 @@ class DDoSConsole:
         return ""
 
     def update_server_status(self, silent=False):
-        """
-        Обновляет статус всех серверов
-        :param silent: Если True, не выводит сообщения о процессе проверки
-        """
+        """Обновление статуса всех серверов"""
         if not silent:
-            print("\nПроверка статуса серверов...")
+            print("\n[INFO] Обновление статуса серверов...")
         
         for server in self.servers:
-            if isinstance(server, dict) and "host" in server and "port" in server:
+            try:
+                status = self.check_server_status(server['host'], silent=silent)
+                server['status'] = 'online' if status else 'offline'
+                
+                # Получаем статистику сервера
+                stats = self.server_monitor.get_server_stats(server['host'])
+                if stats:
+                    server['stats'] = stats
+                    
+            except Exception as e:
                 if not silent:
-                    print(f"\nСервер: {server['name']} ({server['host']})")
-                    print(f"  Пользователь: {server.get('username', 'root')}")
+                    print(f"[ERROR] Ошибка при обновлении статуса сервера {server['host']}: {str(e)}")
+                server['status'] = 'offline'
                 
-                old_status = server.get("status", "offline")
-                server["status"] = "online" if self.check_server_status(server["host"], server["port"], silent) else "offline"
-                
-                # Выводим сообщение только при изменении статуса в тихом режиме
-                if silent and old_status != server["status"]:
-                    status_color = "\033[92m" if server["status"] == "online" else "\033[91m"
-                    print(f"\nСтатус сервера {server['name']} изменился: {status_color}{server['status']}\033[0m")
-                elif not silent:
-                    status_color = "\033[92m" if server["status"] == "online" else "\033[91m"
-                    print(f"  Итоговый статус: {status_color}{server['status']}\033[0m")
-        
-        self.save_servers(silent=True)  # Тихое сохранение при обновлении статуса
-        if not silent:
-            print("\nПроверка завершена!")
+        self.save_servers(silent=True)
 
     def add_server(self):
         print("\nДобавление нового сервера:")
@@ -1236,105 +1204,87 @@ class DDoSConsole:
         return params
 
     def execute_attack(self, servers: List[Dict], attack_params: dict, attack_type: str, duration: int):
-        """Выполнение атаки на выбранных серверах"""
-        try:
-            if not servers:
-                print("\n[ERROR] Нет доступных серверов для выполнения атаки!")
-                return
-
-            # Проверяем наличие файла attack.py
-            if not os.path.exists("attack.py"):
-                print("\n[ERROR] Файл attack.py не найден в текущей директории!")
-                return
+        attack_id = f"{attack_type}_{int(time.time())}"
+        
+        for server in servers:
+            if not self.security_manager.can_execute_attack(server['ip']):
+                print(f"Атака на сервер {server['ip']} заблокирована из-за превышения лимита")
+                continue
                 
-            # Проверяем содержимое файла attack.py
             try:
-                with open("attack.py", "r", encoding="utf-8") as f:
-                    content = f.read()
-                    if not content.strip():
-                        print("\n[ERROR] Файл attack.py пуст!")
-                        return
-                    if "def main()" not in content:
-                        print("\n[ERROR] Файл attack.py не содержит функцию main()!")
-                        return
+                # Создаем точку восстановления перед началом атаки
+                self.recovery_manager.create_recovery_point(attack_id, {
+                    'server': server,
+                    'attack_type': attack_type,
+                    'params': attack_params,
+                    'duration': duration
+                })
+                
+                # Запускаем атаку через контроллер
+                self.attack_controller.start_attack(attack_id, server, attack_type, attack_params, duration)
+                self.attack_monitor.start_attack(attack_id, server, attack_type, attack_params)
+                
+                # Очищаем точку восстановления после успешного запуска
+                self.recovery_manager.clear_recovery_point(attack_id)
+                
             except Exception as e:
-                print(f"\n[ERROR] Ошибка при чтении файла attack.py: {str(e)}")
-                return
-
-            # Проверяем, что все серверы онлайн
-            online_servers = [s for s in servers if s.get("status") == "online"]
-            if not online_servers:
-                print("\n[ERROR] Нет доступных онлайн серверов!")
-                return
-
-            # Создаем директорию для логов, если её нет
-            if not os.path.exists(self.logs_dir):
-                os.makedirs(self.logs_dir)
-
-            # Генерируем уникальное имя для лог-файла
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            category, attack_id = attack_type.split('_')
-            attack_name = self.attack_types[category][attack_id].replace(" ", "_")
-            log_file = os.path.join(self.logs_dir, f"{attack_name}_{timestamp}.log")
-
-            # Создаем заголовок лог-файла
-            with open(log_file, "w", encoding="utf-8") as f:
-                f.write(f"=== Атака начата {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===\n")
-                f.write(f"Цель: {attack_params['target']}\n")
-                f.write(f"Тип атаки: {self.attack_types[category][attack_id]}\n")
-                f.write(f"Длительность: {duration} секунд\n")
-                f.write(f"Количество серверов: {len(online_servers)}\n")
-                f.write("\nПараметры атаки:\n")
-                for key, value in attack_params.items():
-                    if key != "target":  # Цель уже выведена выше
-                        f.write(f"{key}: {value}\n")
-                f.write("\nСписок серверов:\n")
-                for server in online_servers:
-                    f.write(f"- {server['name']} ({server['host']})\n")
-                f.write("\n")
-
-            print(f"\n[INFO] Начало атаки на {len(online_servers)} серверов")
-            print(f"[INFO] Цель: {attack_params['target']}")
-            print(f"[INFO] Тип атаки: {self.attack_types[category][attack_id]}")
-            print(f"[INFO] Длительность: {duration} секунд")
-            print(f"[INFO] Логи будут сохранены в: {log_file}")
-
-            # Запускаем атаки на всех серверах
-            attack_threads = []
-            for server in online_servers:
-                try:
-                    thread = threading.Thread(
-                        target=self._execute_attack_on_server,
-                        args=(server, attack_params, attack_type, duration, log_file)
-                    )
-                    thread.start()
-                    attack_threads.append(thread)
-                    print(f"[INFO] Запущена атака на сервере {server['name']}")
-                except Exception as e:
-                    print(f"[ERROR] Ошибка при запуске атаки на сервере {server['name']}: {str(e)}")
-                    continue
-
-            # Ждем завершения всех атак
-            for thread in attack_threads:
-                try:
-                    thread.join()
-                except Exception as e:
-                    print(f"[ERROR] Ошибка при ожидании завершения потока: {str(e)}")
-
-            # Добавляем итоговую информацию в лог
-            with open(log_file, "a", encoding="utf-8") as f:
-                f.write(f"\n=== Атака завершена {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===\n")
-                f.write(f"Общая длительность: {duration} секунд\n")
-                f.write(f"Количество задействованных серверов: {len(online_servers)}\n")
-
-            print(f"\n[INFO] Атака успешно завершена!")
-            print(f"[INFO] Подробные логи сохранены в файл: {log_file}")
-            
+                error_msg = f"Ошибка при выполнении атаки: {str(e)}"
+                
+                # Пытаемся восстановиться из точки восстановления
+                recovery_state = self.recovery_manager.attempt_recovery(attack_id, e)
+                if recovery_state and self.error_handler.handle_error('attack_execution', error_msg):
+                    print("[INFO] Повторная попытка выполнения атаки после восстановления")
+                    self.execute_attack([recovery_state['server']], 
+                                     recovery_state['params'],
+                                     recovery_state['attack_type'],
+                                     recovery_state['duration'])
+                else:
+                    self.attack_monitor.stop_attack(attack_id, success=False, error=error_msg)
+                    
+            finally:
+                self.attack_monitor.cleanup_old_attacks()
+                
+    def pause_attack(self, attack_id):
+        """Приостановка атаки"""
+        try:
+            self.attack_controller.pause_attack(attack_id)
+            print(f"[INFO] Атака {attack_id} приостановлена")
         except Exception as e:
-            print(f"\n[ERROR] Критическая ошибка при выполнении атаки: {str(e)}")
-            if 'log_file' in locals():
-                with open(log_file, "a", encoding="utf-8") as f:
-                    f.write(f"\nКРИТИЧЕСКАЯ ОШИБКА: {str(e)}\n")
+            print(f"[ERROR] Ошибка при приостановке атаки: {str(e)}")
+
+    def resume_attack(self, attack_id):
+        """Возобновление атаки"""
+        try:
+            self.attack_controller.resume_attack(attack_id)
+            print(f"[INFO] Атака {attack_id} возобновлена")
+        except Exception as e:
+            print(f"[ERROR] Ошибка при возобновлении атаки: {str(e)}")
+
+    def stop_attack(self, attack_id):
+        try:
+            self.attack_controller.stop_attack(attack_id)
+            self.attack_monitor.stop_attack(attack_id)
+            print(f"[INFO] Атака {attack_id} остановлена")
+        except Exception as e:
+            print(f"[ERROR] Ошибка при остановке атаки: {str(e)}")
+            
+    def list_attacks(self):
+        attacks = self.attack_controller.list_attacks()
+        print("\n=== Активные атаки ===")
+        for attack_id, attack in attacks['active'].items():
+            print(f"ID: {attack_id}")
+            print(f"Тип: {attack['type']}")
+            print(f"Сервер: {attack['server']['name']}")
+            print(f"Статус: {attack['status']}")
+            print("---")
+            
+        print("\n=== Приостановленные атаки ===")
+        for attack_id, attack in attacks['paused'].items():
+            print(f"ID: {attack_id}")
+            print(f"Тип: {attack['type']}")
+            print(f"Сервер: {attack['server']['name']}")
+            print(f"Статус: {attack['status']}")
+            print("---")
 
     def _execute_attack_on_server(self, server: Dict, attack_params: dict, attack_type: str, duration: int, log_file: str):
         try:
@@ -1583,117 +1533,328 @@ class DDoSConsole:
             print(f"Ошибка при автоматической загрузке серверов из шаблона: {str(e)}")
 
     def main_menu(self):
+        """Главное меню консоли"""
+        while True:
+            print("\n=== Web Testing Console ===")
+            print("1. Управление серверами")
+            print("2. Управление атаками")
+            print("3. Мониторинг")
+            print("4. Настройки")
+            print("0. Выход")
+            
+            choice = input("\nВыберите пункт меню: ")
+            
+            if choice == "1":
+                self.server_menu()
+            elif choice == "2":
+                self.attack_menu()
+            elif choice == "3":
+                self.monitoring_menu()
+            elif choice == "4":
+                self.settings_menu()
+            elif choice == "0":
+                print("\n[INFO] Завершение работы...")
+                break
+            else:
+                print("\n[ERROR] Неверный выбор!")
+
+    def server_menu(self):
+        """Меню управления серверами"""
+        while True:
+            print("\n=== Управление серверами ===")
+            print("1. Добавить сервер")
+            print("2. Список серверов")
+            print("3. Проверить статус")
+            print("0. Назад")
+            
+            choice = input("\nВыберите пункт меню: ")
+            
+            if choice == "1":
+                self.add_server()
+            elif choice == "2":
+                self.list_servers()
+            elif choice == "3":
+                self.update_server_status()
+            elif choice == "0":
+                break
+            else:
+                print("\n[ERROR] Неверный выбор!")
+
+    def attack_menu(self):
+        """Меню управления атаками"""
+        while True:
+            print("\n=== Управление атаками ===")
+            print("1. Запустить атаку")
+            print("2. Список атак")
+            print("3. Приостановить атаку")
+            print("4. Возобновить атаку")
+            print("5. Остановить атаку")
+            print("0. Назад")
+            
+            choice = input("\nВыберите пункт меню: ")
+            
+            if choice == "1":
+                self.start_attack_menu()
+            elif choice == "2":
+                self.list_attacks()
+            elif choice == "3":
+                attack_id = input("\nВведите ID атаки: ")
+                self.pause_attack(attack_id)
+            elif choice == "4":
+                attack_id = input("\nВведите ID атаки: ")
+                self.resume_attack(attack_id)
+            elif choice == "5":
+                attack_id = input("\nВведите ID атаки: ")
+                self.stop_attack(attack_id)
+            elif choice == "0":
+                break
+            else:
+                print("\n[ERROR] Неверный выбор!")
+                
+    def monitoring_menu(self):
+        """Меню мониторинга"""
+        while True:
+            print("\n=== Мониторинг ===")
+            print("1. Статус серверов")
+            print("2. Активные атаки")
+            print("3. Статистика атак")
+            print("4. Логи атак")
+            print("0. Назад")
+            
+            choice = input("\nВыберите пункт меню: ")
+            
+            if choice == "1":
+                self.show_server_status()
+            elif choice == "2":
+                self.show_active_attacks()
+            elif choice == "3":
+                self.show_attack_stats()
+            elif choice == "4":
+                self.show_attack_logs()
+            elif choice == "0":
+                break
+            else:
+                print("\n[ERROR] Неверный выбор!")
+                
+    def settings_menu(self):
+        """Меню настроек"""
+        while True:
+            print("\n=== Настройки ===")
+            print("1. Лимиты атак")
+            print("2. Интервалы проверки")
+            print("3. Настройки логирования")
+            print("0. Назад")
+            
+            choice = input("\nВыберите пункт меню: ")
+            
+            if choice == "1":
+                self.configure_attack_limits()
+            elif choice == "2":
+                self.configure_check_intervals()
+            elif choice == "3":
+                self.configure_logging()
+            elif choice == "0":
+                break
+            else:
+                print("\n[ERROR] Неверный выбор!")
+                
+    def start_attack_menu(self):
+        """Меню запуска атаки"""
+        print("\n=== Запуск атаки ===")
+        
+        # Выбор категории атаки
+        self.list_attack_categories()
+        category = input("\nВыберите категорию атаки: ")
+        
+        if category not in self.attack_categories:
+            print("\n[ERROR] Неверная категория!")
+            return
+            
+        # Выбор типа атаки
+        self.list_attack_types(category)
+        attack_id = input("\nВыберите тип атаки: ")
+        
+        if attack_id not in self.attack_types[category]:
+            print("\n[ERROR] Неверный тип атаки!")
+            return
+                            
+        # Выбор серверов
+        print("\nДоступные серверы:")
+        self.list_servers()
+        server_choice = input("\nВыберите серверы (через запятую) или 'all' для всех: ")
+        
+        if server_choice.lower() == 'all':
+            servers = [s for s in self.servers if s.get("status") == "online"]
+        else:
+            try:
+                server_indices = [int(i.strip()) for i in server_choice.split(",")]
+                servers = [self.servers[i-1] for i in server_indices if 0 < i <= len(self.servers)]
+            except ValueError:
+                print("\n[ERROR] Неверный формат выбора серверов!")
+                return
+                
+        if not servers:
+            print("\n[ERROR] Нет доступных серверов!")
+            return
+            
+        # Параметры атаки
+        attack_params = self.get_attack_parameters(category, attack_id)
+        if not attack_params:
+            print("\n[ERROR] Не удалось получить параметры атаки!")
+            return
+            
+        # Длительность атаки
         try:
-            while True:
-                print("\n=== Панель тестирования ===")
-                print("1. Добавить сервер")
-                print("2. Список серверов")
-                print("3. Обновить статус серверов")
-                print("4. Запустить атаку")
-                print("5. Выход")
-                
-                choice = input("\nВыберите действие: ")
-                
-                if choice == "1":
-                    self.add_server()
-                elif choice == "2":
-                    self.list_servers()
-                elif choice == "3":
-                    print("\nОбновление статуса серверов...")
-                    self.update_server_status()
-                    print("Статус серверов обновлен!")
-                elif choice == "4":
-                    if not self.servers:
-                        print("\nСначала добавьте хотя бы один сервер!")
-                        continue
-                    
-                    while True:
-                        # Выбор категории атаки
-                        self.list_attack_categories()
-                        print("\n0. Назад")
-                        category = input("\nВыберите категорию атаки: ").strip()
-                        
-                        if category == "0":
-                            break
-                            
-                        if category not in self.attack_categories:
-                            print("Неверная категория атаки!")
-                            continue
-                        
-                        while True:
-                            # Выбор конкретной атаки
-                            self.list_attack_types(category)
-                            print("\n0. Назад")
-                            attack_id = input("\nВыберите тип атаки: ").strip()
-                            
-                            if attack_id == "0":
-                                break
-                                
-                            if attack_id not in self.attack_types[category]:
-                                print("Неверный тип атаки!")
-                                continue
-                            
-                            # Получаем полный идентификатор атаки
-                            attack_type = self.get_attack_type(category, attack_id)
-                            
-                            # Выбор серверов
-                            self.list_servers()
-                            server_choice = input("\nВыберите номер сервера: ").strip()
-                            
-                            if server_choice == "0":
-                                break
-                            
-                            # Выбор серверов для атаки
-                            try:
-                                if not server_choice:  # Если пользователь ничего не ввел
-                                    # Используем все онлайн сервера по умолчанию
-                                    selected_servers = [s for s in self.servers if s.get("status") == "online"]
-                                    print(f"\nВыбраны все онлайн сервера ({len(selected_servers)} серверов)")
-                                else:
-                                    server_index = int(server_choice) - 1
-                                    if 0 <= server_index < len(self.servers):
-                                        selected_servers = [self.servers[server_index]]
-                                    else:
-                                        print("Неверный номер сервера!")
-                                        continue
-                            except ValueError:
-                                print("Неверный номер сервера!")
-                                continue
-                            
-                            # Получаем параметры атаки
-                            attack_params = self.get_attack_parameters(category, attack_id)
-                            
-                            # Ввод длительности атаки
-                            duration = input("\nВведите длительность атаки в секундах [60]: ").strip()
-                            
-                            # По умолчанию 60 секунд
-                            if not duration:
-                                duration = "60"
-                            
-                            try:
-                                duration = int(duration)
-                                if duration <= 0:
-                                    print("Длительность должна быть положительным числом!")
-                                    continue
-                            except ValueError:
-                                print("Неверный формат длительности!")
-                                continue
-                            
-                            # Запуск атаки
-                            self.execute_attack(selected_servers, attack_params, attack_type, duration)
-                            break
-                        
-                        if attack_id == "0":
-                            continue
-                        break
-                    
-                elif choice == "5":
-                    print("\nЗавершение работы...")
-                    break
-                else:
-                    print("\nНеверный выбор!")
-        finally:
-            self.running = False  # Останавливаем фоновую проверку при выходе
+            duration = int(input("\nВведите длительность атаки в секундах: "))
+            if duration <= 0:
+                raise ValueError
+        except ValueError:
+            print("\n[ERROR] Неверная длительность!")
+            return
+            
+        # Запуск атаки
+        try:
+            self.execute_attack(servers, attack_params, f"{category}_{attack_id}", duration)
+            print("\n[INFO] Атака успешно запущена!")
+        except Exception as e:
+            print(f"\n[ERROR] Ошибка при запуске атаки: {str(e)}")
+            
+    def show_server_status(self):
+        """Показать статус серверов"""
+        print("\n=== Статус серверов ===")
+        for server in self.servers:
+            stats = self.server_monitor.get_server_stats(server['host'])
+            print(f"\nСервер: {server['name']} ({server['host']})")
+            print(f"Статус: {server['status']}")
+            if stats:
+                print(f"Последняя проверка: {datetime.fromtimestamp(stats['last_check']).strftime('%Y-%m-%d %H:%M:%S')}")
+                if stats['latency_history']:
+                    avg_latency = sum(stats['latency_history']) / len(stats['latency_history'])
+                    print(f"Средняя задержка: {avg_latency:.2f} мс")
+                if stats['error_history']:
+                    print("Последние ошибки:")
+                    for error in stats['error_history'][-3:]:  # Показываем последние 3 ошибки
+                        print(f"- {datetime.fromtimestamp(error['time']).strftime('%Y-%m-%d %H:%M:%S')}: {error['error']}")
+            print("---")
+            
+    def show_active_attacks(self):
+        """Показать активные атаки"""
+        attacks = self.attack_controller.list_attacks()
+        print("\n=== Активные атаки ===")
+        for attack_id, attack in attacks['active'].items():
+            print(f"\nID: {attack_id}")
+            print(f"Тип: {attack['type']}")
+            print(f"Сервер: {attack['server']['name']}")
+            print(f"Статус: {attack['status']}")
+            print(f"Запущена: {datetime.fromtimestamp(attack['start_time']).strftime('%Y-%m-%d %H:%M:%S')}")
+            print(f"Длительность: {attack['duration']} секунд")
+            print("---")
+            
+        print("\n=== Приостановленные атаки ===")
+        for attack_id, attack in attacks['paused'].items():
+            print(f"\nID: {attack_id}")
+            print(f"Тип: {attack['type']}")
+            print(f"Сервер: {attack['server']['name']}")
+            print(f"Статус: {attack['status']}")
+            print(f"Запущена: {datetime.fromtimestamp(attack['start_time']).strftime('%Y-%m-%d %H:%M:%S')}")
+            print(f"Длительность: {attack['duration']} секунд")
+            print("---")
+            
+    def show_attack_stats(self):
+        """Показать статистику атак"""
+        print("\n=== Статистика атак ===")
+        for attack_id, attack in self.attack_monitor.attack_stats.items():
+            print(f"\nID: {attack_id}")
+            print(f"Тип: {attack['type']}")
+            print(f"Сервер: {attack['server']['name']}")
+            print(f"Статус: {attack['status']}")
+            print(f"Запущена: {datetime.fromtimestamp(attack['start_time']).strftime('%Y-%m-%d %H:%M:%S')}")
+            if 'end_time' in attack['stats']:
+                print(f"Завершена: {datetime.fromtimestamp(attack['stats']['end_time']).strftime('%Y-%m-%d %H:%M:%S')}")
+                print(f"Длительность: {attack['stats']['duration']:.2f} секунд")
+            print(f"Отправлено пакетов: {attack['stats']['packets_sent']}")
+            print(f"Отправлено байт: {attack['stats']['bytes_sent']}")
+            print(f"Ошибок: {attack['stats']['errors']}")
+            print("---")
+            
+    def show_attack_logs(self):
+        """Показать логи атак"""
+        print("\n=== Логи атак ===")
+        if not os.path.exists(self.logs_dir):
+            print("[INFO] Директория логов пуста")
+            return
+            
+        logs = [f for f in os.listdir(self.logs_dir) if f.endswith('.log')]
+        if not logs:
+            print("[INFO] Логи не найдены")
+            return
+            
+        for log in sorted(logs, reverse=True):  # Сначала показываем новые логи
+            print(f"\n=== {log} ===")
+            try:
+                with open(os.path.join(self.logs_dir, log), 'r', encoding='utf-8') as f:
+                    print(f.read())
+            except Exception as e:
+                print(f"[ERROR] Ошибка при чтении лога {log}: {str(e)}")
+            print("---")
+            
+    def configure_attack_limits(self):
+        """Настройка лимитов атак"""
+        print("\n=== Настройка лимитов атак ===")
+        try:
+            max_concurrent = int(input("Максимальное количество одновременных атак: "))
+            max_per_hour = int(input("Максимальное количество атак в час: "))
+            attack_timeout = int(input("Таймаут атаки в секундах: "))
+            
+            self.attack_controller.max_concurrent_attacks = max_concurrent
+            self.security_manager.max_attacks_per_hour = max_per_hour
+            self.attack_monitor.attack_timeout = attack_timeout
+            
+            print("\n[INFO] Лимиты успешно обновлены")
+        except ValueError:
+            print("\n[ERROR] Неверный формат значений!")
+            
+    def configure_check_intervals(self):
+        """Настройка интервалов проверки"""
+        print("\n=== Настройка интервалов проверки ===")
+        try:
+            server_check = int(input("Интервал проверки серверов в секундах: "))
+            attack_check = int(input("Интервал проверки атак в секундах: "))
+            
+            self.server_monitor.check_interval = server_check
+            self.attack_monitor.check_interval = attack_check
+            
+            print("\n[INFO] Интервалы успешно обновлены")
+        except ValueError:
+            print("\n[ERROR] Неверный формат значений!")
+            
+    def configure_logging(self):
+        """Настройка логирования"""
+        print("\n=== Настройка логирования ===")
+        print("1. Включить подробное логирование")
+        print("2. Отключить подробное логирование")
+        print("3. Очистить логи")
+        print("0. Назад")
+        
+        choice = input("\nВыберите пункт меню: ")
+        
+        if choice == "1":
+            self.attack_monitor.logger.detailed_logging = True
+            print("\n[INFO] Подробное логирование включено")
+        elif choice == "2":
+            self.attack_monitor.logger.detailed_logging = False
+            print("\n[INFO] Подробное логирование отключено")
+        elif choice == "3":
+            if os.path.exists(self.logs_dir):
+                for log in os.listdir(self.logs_dir):
+                    os.remove(os.path.join(self.logs_dir, log))
+                print("\n[INFO] Логи очищены")
+            else:
+                print("\n[INFO] Директория логов пуста")
+        elif choice == "0":
+            return
+        else:
+            print("\n[ERROR] Неверный выбор!")
 
     def load_or_create_key(self):
         """Загрузка существующего ключа шифрования или создание нового"""
@@ -1709,6 +1870,123 @@ class DDoSConsole:
         except Exception as e:
             print(f"Ошибка при работе с ключом шифрования: {str(e)}")
             return Fernet.generate_key()  # Создаем новый ключ в случае ошибки
+
+class AttackLogger:
+    def __init__(self, logs_dir="logs"):
+        self.logs_dir = logs_dir
+        if not os.path.exists(logs_dir):
+            os.makedirs(logs_dir)
+            
+    def log_attack_start(self, attack_id, server, attack_type, params):
+        log_file = os.path.join(self.logs_dir, f"attack_{attack_id}.log")
+        with open(log_file, "w", encoding="utf-8") as f:
+            f.write(f"=== Атака начата {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===\n")
+            f.write(f"ID атаки: {attack_id}\n")
+            f.write(f"Сервер: {server['name']} ({server['ip']})\n")
+            f.write(f"Тип атаки: {attack_type}\n")
+            f.write("\nПараметры атаки:\n")
+            for key, value in params.items():
+                f.write(f"{key}: {value}\n")
+            f.write("\n")
+        return log_file
+        
+    def log_attack_stats(self, log_file, stats):
+        with open(log_file, "a", encoding="utf-8") as f:
+            f.write("\n=== Статистика атаки ===\n")
+            f.write(f"Отправлено пакетов: {stats['packets_sent']}\n")
+            f.write(f"Отправлено байт: {stats['bytes_sent']}\n")
+            f.write(f"Ошибок: {stats['errors']}\n")
+            
+    def log_attack_end(self, log_file, success=True, error=None):
+        with open(log_file, "a", encoding="utf-8") as f:
+            f.write(f"\n=== Атака завершена {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===\n")
+            f.write(f"Статус: {'Успешно' if success else 'Ошибка'}\n")
+            if error:
+                f.write(f"Ошибка: {error}\n")
+
+class AttackMonitor:
+    def __init__(self):
+        self.active_attacks = {}
+        self.attack_stats = {}
+        self.max_concurrent_attacks = 5
+        self.attack_timeout = 3600  # 1 час
+        self.logger = AttackLogger()
+        
+    def start_attack(self, attack_id, server, attack_type, params):
+        if len(self.active_attacks) >= self.max_concurrent_attacks:
+            raise Exception("Достигнут лимит одновременных атак")
+            
+        log_file = self.logger.log_attack_start(attack_id, server, attack_type, params)
+            
+        self.active_attacks[attack_id] = {
+            'server': server,
+            'type': attack_type,
+            'params': params,
+            'start_time': time.time(),
+            'status': 'running',
+            'log_file': log_file,
+            'stats': {
+                'packets_sent': 0,
+                'bytes_sent': 0,
+                'errors': 0,
+                'start_time': time.time(),
+                'last_update': time.time()
+            }
+        }
+        
+    def stop_attack(self, attack_id, success=True, error=None):
+        if attack_id in self.active_attacks:
+            attack = self.active_attacks[attack_id]
+            attack['status'] = 'stopped'
+            attack['stats']['end_time'] = time.time()
+            attack['stats']['duration'] = attack['stats']['end_time'] - attack['stats']['start_time']
+            
+            # Логируем статистику и завершение
+            self.logger.log_attack_stats(attack['log_file'], attack['stats'])
+            self.logger.log_attack_end(attack['log_file'], success, error)
+            
+            self.attack_stats[attack_id] = self.active_attacks[attack_id]
+            del self.active_attacks[attack_id]
+            
+    def update_stats(self, attack_id, packets=0, bytes=0, errors=0):
+        if attack_id in self.active_attacks:
+            attack = self.active_attacks[attack_id]
+            attack['stats']['packets_sent'] += packets
+            attack['stats']['bytes_sent'] += bytes
+            attack['stats']['errors'] += errors
+            attack['stats']['last_update'] = time.time()
+            
+            # Обновляем статистику в логе каждые 5 секунд
+            if time.time() - attack['stats'].get('last_log_update', 0) > 5:
+                self.logger.log_attack_stats(attack['log_file'], attack['stats'])
+                attack['stats']['last_log_update'] = time.time()
+
+class SecurityManager:
+    def __init__(self):
+        self.max_attacks_per_hour = 10
+        self.attack_history = []
+        self.blocked_ips = set()
+        
+    def can_execute_attack(self, server_ip):
+        if server_ip in self.blocked_ips:
+            return False
+            
+        current_time = time.time()
+        # Очищаем старую историю
+        self.attack_history = [t for t in self.attack_history if current_time - t < 3600]
+        
+        # Проверяем лимит атак
+        if len(self.attack_history) >= self.max_attacks_per_hour:
+            return False
+            
+        self.attack_history.append(current_time)
+        return True
+        
+    def block_ip(self, ip):
+        self.blocked_ips.add(ip)
+        
+    def unblock_ip(self, ip):
+        self.blocked_ips.discard(ip)
 
 def load_config():
     """Загрузка конфигурации"""
@@ -1805,6 +2083,236 @@ def execute_attack(server_name, attack_type, target):
         ssh.close()
     except Exception as e:
         print(f"\nОшибка при выполнении атаки: {str(e)}")
+
+class ErrorHandler:
+    def __init__(self):
+        self.error_counts = {}
+        self.max_retries = 3
+        self.retry_delay = 5  # секунд
+        
+    def handle_error(self, error_type, error_msg, context=None):
+        if error_type not in self.error_counts:
+            self.error_counts[error_type] = 0
+            
+        self.error_counts[error_type] += 1
+        
+        if self.error_counts[error_type] <= self.max_retries:
+            print(f"[WARNING] {error_msg} (Попытка {self.error_counts[error_type]}/{self.max_retries})")
+            time.sleep(self.retry_delay)
+            return True
+        else:
+            print(f"[ERROR] {error_msg} (Превышено максимальное количество попыток)")
+            return False
+            
+    def reset_error_count(self, error_type):
+        if error_type in self.error_counts:
+            del self.error_counts[error_type]
+
+class RecoveryManager:
+    def __init__(self):
+        self.recovery_points = {}
+        self.error_handler = ErrorHandler()
+        
+    def create_recovery_point(self, attack_id, state):
+        self.recovery_points[attack_id] = {
+            'state': state,
+            'timestamp': time.time()
+        }
+        
+    def get_recovery_point(self, attack_id):
+        return self.recovery_points.get(attack_id)
+        
+    def clear_recovery_point(self, attack_id):
+        if attack_id in self.recovery_points:
+            del self.recovery_points[attack_id]
+            
+    def attempt_recovery(self, attack_id, error):
+        recovery_point = self.get_recovery_point(attack_id)
+        if recovery_point:
+            print(f"[INFO] Попытка восстановления атаки {attack_id} из точки восстановления")
+            return recovery_point['state']
+        return None
+
+class ServerMonitor:
+    def __init__(self, check_interval=60):  # Проверка каждую минуту
+        self.check_interval = check_interval
+        self.server_stats = {}
+        self.connection_attempts = {}
+        self.max_connection_attempts = 3
+        self.reconnect_delay = 30  # секунд
+        
+    def update_server_stats(self, server, status, latency=None, error=None):
+        if server['ip'] not in self.server_stats:
+            self.server_stats[server['ip']] = {
+                'status': status,
+                'last_check': time.time(),
+                'latency_history': [],
+                'error_history': [],
+                'uptime': 0,
+                'downtime': 0
+            }
+            
+        stats = self.server_stats[server['ip']]
+        current_time = time.time()
+        
+        # Обновляем статистику
+        if status == 'online':
+            if stats['status'] == 'offline':
+                stats['uptime'] = current_time
+            stats['downtime'] = 0
+        else:
+            if stats['status'] == 'online':
+                stats['downtime'] = current_time
+            stats['uptime'] = 0
+            
+        stats['status'] = status
+        stats['last_check'] = current_time
+        
+        if latency is not None:
+            stats['latency_history'].append(latency)
+            if len(stats['latency_history']) > 10:  # Храним историю за последние 10 проверок
+                stats['latency_history'].pop(0)
+                
+        if error is not None:
+            stats['error_history'].append({
+                'time': current_time,
+                'error': error
+            })
+            if len(stats['error_history']) > 5:  # Храним историю последних 5 ошибок
+                stats['error_history'].pop(0)
+                
+    def get_server_stats(self, server_ip):
+        return self.server_stats.get(server_ip)
+        
+    def should_attempt_reconnect(self, server_ip):
+        if server_ip not in self.connection_attempts:
+            self.connection_attempts[server_ip] = 0
+            
+        if self.connection_attempts[server_ip] < self.max_connection_attempts:
+            self.connection_attempts[server_ip] += 1
+            return True
+        return False
+        
+    def reset_connection_attempts(self, server_ip):
+        if server_ip in self.connection_attempts:
+            del self.connection_attempts[server_ip]
+
+class AttackController:
+    def __init__(self):
+        self.active_attacks = {}
+        self.paused_attacks = {}
+        self.attack_threads = {}
+        self.attack_events = {}
+        
+    def start_attack(self, attack_id, server, attack_type, params, duration):
+        if attack_id in self.active_attacks:
+            raise Exception(f"Атака {attack_id} уже запущена")
+            
+        # Создаем событие для управления атакой
+        self.attack_events[attack_id] = {
+            'stop': threading.Event(),
+            'pause': threading.Event(),
+            'resume': threading.Event()
+        }
+        
+        # Запускаем атаку в отдельном потоке
+        thread = threading.Thread(
+            target=self._run_attack,
+            args=(attack_id, server, attack_type, params, duration)
+        )
+        thread.daemon = True
+        thread.start()
+        
+        self.attack_threads[attack_id] = thread
+        self.active_attacks[attack_id] = {
+            'server': server,
+            'type': attack_type,
+            'params': params,
+            'duration': duration,
+            'start_time': time.time(),
+            'status': 'running'
+        }
+        
+    def pause_attack(self, attack_id):
+        if attack_id not in self.active_attacks:
+            raise Exception(f"Атака {attack_id} не найдена")
+            
+        if attack_id in self.paused_attacks:
+            raise Exception(f"Атака {attack_id} уже приостановлена")
+            
+        self.attack_events[attack_id]['pause'].set()
+        self.active_attacks[attack_id]['status'] = 'paused'
+        self.paused_attacks[attack_id] = self.active_attacks[attack_id]
+        del self.active_attacks[attack_id]
+        
+    def resume_attack(self, attack_id):
+        if attack_id not in self.paused_attacks:
+            raise Exception(f"Атака {attack_id} не приостановлена")
+            
+        self.attack_events[attack_id]['resume'].set()
+        self.active_attacks[attack_id] = self.paused_attacks[attack_id]
+        self.active_attacks[attack_id]['status'] = 'running'
+        del self.paused_attacks[attack_id]
+        
+    def stop_attack(self, attack_id):
+        if attack_id not in self.active_attacks and attack_id not in self.paused_attacks:
+            raise Exception(f"Атака {attack_id} не найдена")
+            
+        self.attack_events[attack_id]['stop'].set()
+        
+        if attack_id in self.active_attacks:
+            del self.active_attacks[attack_id]
+        if attack_id in self.paused_attacks:
+            del self.paused_attacks[attack_id]
+            
+        # Ждем завершения потока
+        if attack_id in self.attack_threads:
+            self.attack_threads[attack_id].join(timeout=5)
+            del self.attack_threads[attack_id]
+            
+        # Очищаем события
+        if attack_id in self.attack_events:
+            del self.attack_events[attack_id]
+            
+    def _run_attack(self, attack_id, server, attack_type, params, duration):
+        start_time = time.time()
+        end_time = start_time + duration
+        
+        while time.time() < end_time:
+            # Проверяем флаги управления
+            if self.attack_events[attack_id]['stop'].is_set():
+                break
+                
+            if self.attack_events[attack_id]['pause'].is_set():
+                self.attack_events[attack_id]['pause'].clear()
+                self.attack_events[attack_id]['resume'].wait()
+                self.attack_events[attack_id]['resume'].clear()
+                
+            try:
+                # Выполняем атаку
+                self._execute_attack(server, attack_type, params)
+            except Exception as e:
+                print(f"[ERROR] Ошибка при выполнении атаки {attack_id}: {str(e)}")
+                break
+                
+            time.sleep(0.1)  # Небольшая задержка для снижения нагрузки
+            
+    def _execute_attack(self, server, attack_type, params):
+        # Здесь должна быть реализация конкретной атаки
+        pass
+        
+    def get_attack_status(self, attack_id):
+        if attack_id in self.active_attacks:
+            return self.active_attacks[attack_id]
+        elif attack_id in self.paused_attacks:
+            return self.paused_attacks[attack_id]
+        return None
+        
+    def list_attacks(self):
+        return {
+            'active': self.active_attacks,
+            'paused': self.paused_attacks
+        }
 
 if __name__ == "__main__":
     console = DDoSConsole()
