@@ -2,7 +2,7 @@
 chcp 65001 > nul
 
 :: Переходим в директорию скрипта
-cd /d "%~dp0"
+cd /d "%~dp0\.."
 echo Текущая директория: %CD%
 echo.
 
@@ -89,17 +89,17 @@ echo.
 
 :: Проверяем наличие необходимых файлов
 echo Проверка файлов проекта...
-if not exist "docker-compose.yml" (
+if not exist "docker\docker-compose.yml" (
     echo Ошибка: файл docker-compose.yml не найден!
     pause
     exit /b 1
 )
-if not exist "Dockerfile" (
+if not exist "docker\Dockerfile" (
     echo Ошибка: файл Dockerfile не найден!
     pause
     exit /b 1
 )
-if not exist "gui.py" (
+if not exist "src\gui.py" (
     echo Ошибка: файл gui.py не найден!
     pause
     exit /b 1
@@ -112,7 +112,9 @@ echo Проверка существующих контейнеров...
 docker ps --filter "name=network-test" --format "{{.Names}}" | findstr "network-test" >nul
 if %errorlevel% equ 0 (
     echo Остановка существующего контейнера...
+    cd docker
     docker-compose down
+    cd ..
     timeout /t 2 /nobreak >nul
 )
 echo.
@@ -144,6 +146,6 @@ echo.
 
 echo Настройка завершена!
 echo.
-echo Теперь вы можете запустить start.bat для запуска приложения.
+echo Теперь вы можете запустить scripts\start.bat для запуска приложения.
 echo.
 pause 

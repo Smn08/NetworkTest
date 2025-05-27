@@ -5,7 +5,7 @@ echo Запуск Network Testing Tool...
 echo.
 
 :: Переходим в директорию скрипта
-cd /d "%~dp0"
+cd /d "%~dp0\.."
 echo Текущая директория: %CD%
 echo.
 
@@ -60,7 +60,7 @@ echo.
 
 :: Проверяем наличие необходимых файлов
 echo Проверка необходимых файлов...
-if not exist "docker-compose.yml" (
+if not exist "docker\docker-compose.yml" (
     echo Ошибка: файл docker-compose.yml не найден!
     echo Текущая директория: %CD%
     pause
@@ -68,7 +68,7 @@ if not exist "docker-compose.yml" (
 )
 echo docker-compose.yml найден.
 
-if not exist "Dockerfile" (
+if not exist "docker\Dockerfile" (
     echo Ошибка: файл Dockerfile не найден!
     echo Текущая директория: %CD%
     pause
@@ -76,7 +76,7 @@ if not exist "Dockerfile" (
 )
 echo Dockerfile найден.
 
-if not exist "gui.py" (
+if not exist "src\gui.py" (
     echo Ошибка: файл gui.py не найден!
     echo Текущая директория: %CD%
     pause
@@ -93,36 +93,59 @@ if %errorlevel% neq 0 (
     timeout /t 2 /nobreak >nul
 )
 
-:: Останавливаем существующие контейнеры
+:: Останавливаем и удаляем существующие контейнеры
 echo Остановка существующих контейнеров...
-docker-compose down
+cd docker
+docker-compose down --remove-orphans
+docker rm -f network-test 2>nul
+cd ..
 timeout /t 2 /nobreak >nul
 
 :: Запускаем контейнер
 echo Запуск контейнера...
-docker-compose up -d
+cd docker
+docker-compose up -d --force-recreate
 if %errorlevel% neq 0 (
     echo Ошибка запуска контейнера!
+    cd ..
     pause
     exit /b 1
 )
+cd ..
 
-:: Ждем запуска контейнера
+:: Ждем запуска контейнера и проверяем его состояние
 echo Ожидание запуска контейнера...
 timeout /t 5 /nobreak >nul
 
+:: Проверяем, что контейнер запущен
+echo Проверка состояния контейнера...
+docker ps --filter "name=network-test" --format "{{.Status}}" | findstr "Up" >nul
+if %errorlevel% neq 0 (
+    echo Ошибка: контейнер не запущен!
+    echo Проверка логов контейнера:
+    docker logs network-test
+    pause
+    exit /b 1
+)
+echo Контейнер запущен успешно.
+echo.
+
 :: Запускаем GUI
 echo Запуск графического интерфейса...
-docker exec -e DISPLAY=host.docker.internal:0.0 -e QT_X11_NO_MITSHM=1 -e QT_DEBUG_PLUGINS=1 -e QT_STYLE_OVERRIDE=Fusion -e QT_QPA_PLATFORM=xcb -e LIBGL_ALWAYS_INDIRECT=1 network-test python3 gui.py
+docker exec -e DISPLAY=host.docker.internal:0.0 -e QT_X11_NO_MITSHM=1 -e QT_DEBUG_PLUGINS=1 -e QT_STYLE_OVERRIDE=Fusion -e QT_QPA_PLATFORM=xcb -e LIBGL_ALWAYS_INDIRECT=1 network-test python3 src/gui.py
 if %errorlevel% neq 0 (
     echo Ошибка запуска GUI!
+    echo Проверка логов контейнера:
+    docker logs network-test
     pause
     exit /b 1
 )
 
 :: Останавливаем контейнер после закрытия GUI
 echo Остановка контейнера...
+cd docker
 docker-compose down
+cd ..
 
 echo Приложение остановлено.
 pause 

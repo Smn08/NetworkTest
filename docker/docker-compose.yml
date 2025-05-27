@@ -1,8 +1,8 @@
-version: '3.8'
-
 services:
   network-test:
-    build: .
+    build: 
+      context: ..
+      dockerfile: docker/Dockerfile
     container_name: network-test
     environment:
       - DISPLAY=host.docker.internal:0.0
@@ -12,7 +12,8 @@ services:
       - QT_QPA_PLATFORM=xcb
       - LIBGL_ALWAYS_INDIRECT=1
     volumes:
-      - .:/app
+      - ../src:/app/src:ro
+      - ../config:/app/config:ro
       - /tmp/.X11-unix:/tmp/.X11-unix
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -20,4 +21,6 @@ services:
     tty: true
     stdin_open: true
     stop_signal: SIGKILL
-    stop_grace_period: 1s 
+    stop_grace_period: 1s
+    restart: unless-stopped
+    command: bash -c "pip3 install -r /app/src/requirements.txt && python3 /app/src/gui.py" 
