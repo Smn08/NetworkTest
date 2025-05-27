@@ -273,20 +273,31 @@ python console.py
 - Linux/Unix серверы для тестирования
 - Доступ к интернету
 
-## License
+## 🛡 License & Legal Notice
 
 This project is licensed under the **Creative Commons Attribution-NonCommercial 4.0 International (CC BY-NC 4.0)** license.
 
 You are free to:
-
-- Share — copy and redistribute the material in any medium or format  
-- Adapt — remix, transform, and build upon the material  
+- Share — copy and redistribute the material in any medium or format
+- Adapt — remix, transform, and build upon the material
 
 **Under the following terms:**
-
 - **Attribution** — You must give appropriate credit, provide a link to the license, and indicate if changes were made.
 - **NonCommercial** — You may not use the material for commercial purposes.
 
-Read the full license text here: [https://creativecommons.org/licenses/by-nc/4.0/](https://creativecommons.org/licenses/by-nc/4.0/)
+🔗 [Full license text](https://creativecommons.org/licenses/by-nc/4.0/)
+
+---
+
+## ⚠️ Legal Disclaimer
+
+This software is intended **solely for educational, research, and lawful testing purposes**.  
+You may only use this software on systems that **you own or have explicit permission to test**.
+
+Any unauthorized use of this tool — including but not limited to **network stress testing**, **denial-of-service attacks**, or **unauthorized scanning** — may be **illegal** under applicable laws.
+
+The author provides this software **as is**, and is **not responsible for any misuse, damage, legal consequences, or harm** resulting from its use.
+
+Use responsibly.
 
 © 2025 [Smn08](https://github.com/Smn08)
